@@ -4,8 +4,8 @@
   #script to run as source powervcrc to be able to run nova command ##
   environment:
     IC_API_KEY: "{{pi_api_key}}"
-    IC_REGION: us-south
-    IC_ZONE: us-south
+    IC_REGION: "{{region}}"
+    IC_ZONE: "{{zone}}"
   
   collections:
     - ibmcloud.ibmcollection
