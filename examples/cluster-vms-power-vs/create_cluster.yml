@@ -3,7 +3,7 @@
   #remote_user: awx
   #script to run as source powervcrc to be able to run nova command ##
   environment:
-    IC_API_KEY: 4EdZx1Or9Xf87PfvPslE6W60tyF31yZCAPXEdLfKwFIw # Api-Ket : awx45-key FIw
+    IC_API_KEY: "{{pi_api_key}}"
     IC_REGION: us-south
     IC_ZONE: us-south
   
@@ -27,7 +27,6 @@
       pi_cloud_instance_id: "{{instance_id}}"
       pi_network_name: "{{item.pi_network_name}}"
     with_items: "{{ private_rac_networks}}"
-    tags: network
     failed_when:
       - pi_network_existing_output.rc != 0
       - '"unable to get network" not in pi_network_existing_output.stderr'
