@@ -1,0 +1,274 @@
+---
+- hosts: localhost
+  #remote_user: awx
+  #script to run as source powervcrc to be able to run nova command ##
+  environment:
+    IC_API_KEY: 4EdZx1Or9Xf87PfvPslE6W60tyF31yZCAPXEdLfKwFIw # Api-Ket : awx45-key FIw
+    IC_REGION: us-south
+    IC_ZONE: us-south
+  
+  collections:
+    - ibmcloud.ibmcollection
+  vars:
+    instance_id: "4eeb9e4c-de30-419a-9993-ef9f0b39f0b0"
+    ip_adresses: []
+    #network_ids: []
+    #networkid_list: []
+  gather_facts: True
+  tasks: 
+  - name: showing networks
+    debug: 
+      msg: "{{private_rac_networks}}"
+    tags: network
+  
+
+  - name: checking if subnet already exists
+    ibm_pi_network_info: 
+      pi_cloud_instance_id: "{{instance_id}}"
+      pi_network_name: "{{item.pi_network_name}}"
+    with_items: "{{ private_rac_networks}}"
+    tags: network
+    failed_when:
+      - pi_network_existing_output.rc != 0
+      - '"unable to get network" not in pi_network_existing_output.stderr'
+    register: pi_network_existing_output
+    tags: network
+
+
+  - name: showing networks
+    debug: 
+      msg: "{{pi_network_existing_output}}"
+    tags: network
+  
+  - name: showing  already existing networks
+    debug: 
+      msg: "{{ pi_network_existing_output.results | json_query(query)  }}"
+    vars: 
+      query: "[? rc ==`0`].{id: resource.id}"
+    tags: network
+
+  - name: setting existing non ecisting networks already existing networks
+    set_fact: 
+      existing_networks: "{{ pi_network_existing_output.results | json_query(query)  }}"
+      tobecreated_networks: "{{ pi_network_existing_output.results | json_query(query1)  }}"
+    vars: 
+      query: "[? rc ==`0`].{id: resource.id}"
+      query1: "[? rc !=`0`].{name: item.pi_network_name} "
+    tags: network
+
+  - name: showing   existing to create
+    debug: 
+      msg: "{{ pi_network_existing_output.results | json_query(query)  }}"
+    vars: 
+      query: "[? rc !=`0`].{name: item.pi_network_name} "
+    tags: network
+ 
+  
+  - name: loop with test 
+    debug: 
+      msg: "{{ item.0.name }} {{ item.1.pi_network_name}}"
+    with_nested: 
+      - "{{tobecreated_networks}}"
+      - "{{ private_rac_networks}}" 
+    when:  item.0.name  == item.1.pi_network_name
+    tags: network
+  
+
+  - name: creating network 
+    ibm_pi_network:
+      pi_cloud_instance_id: "{{instance_id}}"
+      pi_network_name: "{{item.1.pi_network_name}}"
+      pi_network_jumbo: "{{item.1.jumbo}}"
+      pi_network_type: "{{item.1.pi_network_type}}"
+      pi_cidr: "{{item.1.pi_cidr}}"
+      state: available
+    register: pi_networks
+    tags: network
+    #with_items: "{{ private_rac_networks}}"
+    with_nested: 
+      - "{{tobecreated_networks}}"
+      - "{{ private_rac_networks}}" 
+    when:  item.0.name  == item.1.pi_network_name
+ 
+  - name : debuf
+    debug: 
+      msg: "{{sntest}}"
+    tags: sntest
+     
+ 
+
+  - name: Check for existing Volume
+    ibm_pi_volume_info:
+      pi_volume_name: "{{item.pi_volume_name}}"
+      pi_cloud_instance_id: "{{ instance_id }}"
+    failed_when:
+      - pi_volume_existing_output.rc != 0
+      - '"does not exist" not in pi_volume_existing_output.stderr'
+      - '"Resource not found" not in pi_volume_existing_output.stderr'
+      - '"rce not found" not in pi_volume_existing_output.stderr'
+    register: pi_volume_existing_output
+    with_items: "{{ data_disk_list }}"
+    tags: disks
+ 
+  - name: showing disks
+    debug:
+      msg: "{{ pi_volume_existing_output }}"
+    tags: disks
+
+  - name: setting existing/non existing disk already existing networks
+    set_fact: 
+      existing_disks: "{{ pi_volume_existing_output.results | json_query(query)  }}"
+      tobecreated_disks: "{{ pi_volume_existing_output.results | json_query(query1)  }}"
+    vars: 
+      query: "[? rc ==`0`].{id: resource.id, name: resource.name}"
+      query1: "[? rc !=`0`].{name: item.pi_volume_name} "
+    tags: disks
+
+  
+  - name: creating disks
+    ibm_pi_volume:
+      pi_cloud_instance_id: "{{instance_id}}"
+      pi_volume_shareable: "{{item.1.pi_volume_shareable}}"
+      pi_volume_name: "{{item.1.pi_volume_name}}"
+      pi_volume_size: "{{item.1.pi_volume_size}}"
+      pi_volume_type: "{{item.1.pi_volume_type}}"
+      state: available
+    #with_items: "{{ data_disk_list }}"
+    with_nested: 
+      - "{{tobecreated_disks}}"
+      - "{{data_disk_list}}" 
+    when:  item.0.name  == item.1.pi_volume_name
+    register: pi_vols
+    tags: disks
+
+  - name: showing disks
+    debug:
+      msg: "{{ pi_volume_existing_output }}"
+    tags: disks
+
+  - name: showing disks
+    debug:
+      msg: "{{ pi_vols }}"
+    tags: disks
+
+  - name: setting disks var with ids
+    debug:
+      msg: "{{item}}"
+    with_items:
+      - "{{ existing_disks | json_query(query) }}"
+    vars:
+      query: "[*].id"
+    tags: disks
+
+  - name: setting disks var with ids
+    set_fact:
+      diskid_list: "{{pi_vols | json_query(query) + existing_disks | json_query(query1) }}"
+    #with_items:
+      #- "{{ pi_vols | json_query(query) }}"
+      #- "{{ existing_disks | json_query(query1) }}"
+    vars:
+      query: "results[*].resource.volume_id"
+      query1: "[*].id"
+    tags: disks
+
+  - name: cheking var 
+    debug: 
+      msg: "{{diskid_list}}"
+    tags: disks
+  
+  - name: Retrieve image list
+    ibm_pi_images_info:
+      pi_cloud_instance_id: "{{ pi_cloud_instance_id }}"
+    register: images_list
+    tags: images
+
+  - name: Set VM image name/id dictionary fact
+    set_fact:
+      image_dict: "{{ images_list.resource.image_info |
+                      items2dict(key_name='name',
+                      value_name='id') }}"
+    tags: images
+  - name: displaying image selected
+    debug:
+      msg: "{{ image_dict[pi_image] }}"
+    tags: images
+
+  - name: creating affinity policy
+    ibm_pi_placement_group:
+      pi_cloud_instance_id: "{{ pi_cloud_instance_id }}"
+      pi_placement_group_name: "{{ affinity_policy }}"
+      pi_placement_group_policy: "anti-affinity"
+    register: affpolicy
+    tags: policy
+
+  - name: showwing affinity poilicy
+    set_fact: 
+      pi_placement_group_id: "{{ affpolicy.resource.placement_group_id}}"
+      #msg: "{{ affpolicy.resource.id }}"
+    when: affpolicy.changed == True
+    tags: policy
+
+  - name: showwing affinity poilicy
+    set_fact: 
+      pi_placement_group_id: "{{ affpolicy.resource.id }}"
+    when: affpolicy.changed == False
+    tags: policy
+
+  - name: Check for existing Virtual Server Instance
+    ibm_pi_instance_info:
+      pi_instance_name: "{{ pi_name }}"
+      pi_cloud_instance_id: "{{ pi_cloud_instance_id }}"
+    failed_when:
+      - pi_instance_existing_output.rc != 0
+      - '"does not exist" not in pi_instance_existing_output.stderr'
+    with_sequence: start=1 end={{cluster_vm_name_number}} format={{cluster_vm_name_prefix}}%04x
+    register: pi_instance_existing_output
+    tags: vm
+
+
+  - name: Create a POWER Virtual Server Instance
+    ibm_pi_instance:
+      state: available
+      pi_placement_group_id : "{{ pi_placement_group_id }}"
+      pi_memory: "{{ memory }}"
+      pi_processors: "{{ processors }}"
+      pi_instance_name: "{{ item }}"
+      pi_proc_type: "{{ proc_type }}"
+      pi_image_id: "{{ image_dict[pi_image] }}"
+      pi_volume_ids:  "{{diskid_list}}" 
+      #pi_volume_ids:  "{{pi_volume_existing_output | json_query('results[*].resource.id') }}"
+      pi_network: "{{lpar_networks}}"
+        #- network_id: "PVSDALLAS12_101_SN"
+        #- network_id: "RACA"
+        #- network_id: "RACB"
+        #- network_id: "RACC"
+        #- network_id: "23576aae-b584-4f0e-8ceb-974ee4352420"
+        #- network_id: "844fb31e-289d-4a86-84fd-2dae1723492e"
+      pi_key_pair_name: "{{ ssh_public_key }}"
+      #pi_key_pair_name: "{{ pi_ssh_key.pi_key_name }}"
+      pi_sys_type: "{{ sys_type }}"
+      pi_replication_policy: none
+      pi_replication_scheme: suffix
+      pi_replicants: "1"
+      pi_cloud_instance_id: "{{ pi_cloud_instance_id }}"
+      id: "{{ pi_instance.resource.id | default(omit) }}"
+      pi_health_status: WARNING
+    register: pi_instance_create_output
+    with_sequence: start=1 end={{cluster_vm_name_number}} format={{cluster_vm_name_prefix}}%04x
+    #when: pi_instance_existing_output.rc != 0
+    tags: vm
+   
+  - meta: end_play 
+
+  #- name: setting disks var with ids
+    #setfact:
+      #diskid_list: 
+    #with_items: 
+      #- "{{ pi_vols.results | json_query(query) }}"
+    #vars: 
+      #query: "item[? skipped != true ]. "
+    #tags: disks
+
+
+      
+
