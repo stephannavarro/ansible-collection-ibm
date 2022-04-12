@@ -1,3 +1,4 @@
+```
 pi_cloud_instance_id: YOUR_INSTANCE_ID
 pi_api_key : YOUR_API_KEY
 region : us-south
@@ -36,3 +37,5 @@ private_rac_networks:
   - { pi_network_name: RACC , pi_cidr: "192.168.122.0/24" , jumbo: True , pi_network_type: vlan  }
   - { pi_network_name: RACD , pi_cidr: "192.168.123.0/24" , jumbo: True , pi_network_type: vlan  }
   - { pi_network_name: RACE , pi_cidr: "192.168.124.0/24" , jumbo: True , pi_network_type: vlan  }
+
+```
