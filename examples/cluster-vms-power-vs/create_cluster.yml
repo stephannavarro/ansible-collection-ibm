@@ -1,7 +1,5 @@
 ---
 - hosts: localhost
-  #remote_user: awx
-  #script to run as source powervcrc to be able to run nova command ##
   environment:
     IC_API_KEY: "{{pi_api_key}}"
     IC_REGION: "{{region}}"
@@ -12,8 +10,6 @@
   vars:
     instance_id: "4eeb9e4c-de30-419a-9993-ef9f0b39f0b0"
     ip_adresses: []
-    #network_ids: []
-    #networkid_list: []
   gather_facts: True
   tasks: 
   - name: showing networks
@@ -83,18 +79,21 @@
       state: available
     register: pi_networks
     tags: network
-    #with_items: "{{ private_rac_networks}}"
     with_nested: 
       - "{{tobecreated_networks}}"
       - "{{ private_rac_networks}}" 
     when:  item.0.name  == item.1.pi_network_name
  
-  - name : debuf
-    debug: 
-      msg: "{{sntest}}"
-    tags: sntest
-     
+  - name: seting lpar netwok list
+    set_fact: 
+      lpar_network_list: "{{lpar_network_list | default([]) + [item]}}"     
+    with_items: "{{private_rac_networks | json_query('[*].{network_id: pi_network_name}')}}"
+    tags: network
  
+  - name : debug
+    debug: 
+      msg: "{{lpar_network_list}}"
+    tags: network
 
   - name: Check for existing Volume
     ibm_pi_volume_info:
@@ -132,7 +131,6 @@
       pi_volume_size: "{{item.1.pi_volume_size}}"
       pi_volume_type: "{{item.1.pi_volume_type}}"
       state: available
-    #with_items: "{{ data_disk_list }}"
     with_nested: 
       - "{{tobecreated_disks}}"
       - "{{data_disk_list}}" 
@@ -162,9 +160,6 @@
   - name: setting disks var with ids
     set_fact:
       diskid_list: "{{pi_vols | json_query(query) + existing_disks | json_query(query1) }}"
-    #with_items:
-      #- "{{ pi_vols | json_query(query) }}"
-      #- "{{ existing_disks | json_query(query1) }}"
     vars:
       query: "results[*].resource.volume_id"
       query1: "[*].id"
@@ -195,8 +190,8 @@
   - name: creating affinity policy
     ibm_pi_placement_group:
       pi_cloud_instance_id: "{{ pi_cloud_instance_id }}"
-      pi_placement_group_name: "{{ affinity_policy }}"
-      pi_placement_group_policy: "anti-affinity"
+      pi_placement_group_name: "{{ affinity_policy.name }}"
+      pi_placement_group_policy: "{{ affinity_policy.policy }}"
     register: affpolicy
     tags: policy
 
@@ -213,9 +208,77 @@
     when: affpolicy.changed == False
     tags: policy
 
+  - name : setting LPAR Names Vars
+    set_fact: 
+      lpar_names: "{{lpar_names | default([]) + [item]}}"
+    with_sequence: start=1 end={{cluster_vm_name_number}} format={{cluster_vm_name_prefix}}%04x
+    tags: 
+      - sntest
+      - vm
+
+  - name: showing lpar names
+    debug: 
+      msg: "{{lpar_names}}"
+    tags:
+      - sntest
+      - vm
+
   - name: Check for existing Virtual Server Instance
     ibm_pi_instance_info:
-      pi_instance_name: "{{ pi_name }}"
+      pi_instance_name: "{{ item }}"
+      pi_cloud_instance_id: "{{ pi_cloud_instance_id }}"
+    failed_when:
+      - pi_instance_existing_output.rc != 0
+      - '"does not exist" not in pi_instance_existing_output.stderr'
+    with_items: "{{lpar_names}}"
+    register: pi_instance_existing_output
+    tags: 
+      - sntest
+      - vm
+
+  - name: setting existing/non existing disk already existing networks
+    set_fact:
+      existing_lpars: "{{ pi_instance_existing_output.results | json_query(query)  }}"
+      tobecreated_lpars: "{{ pi_instance_existing_output.results | json_query(query1)  }}"
+    vars:
+      query: "[? rc ==`0`].{id: resource.id, name: resource.pi_instance_name}"
+      query1: "[? rc !=`0`].{name: item}"
+      #query1: "[? rc !=`0`].{name: item} "
+    tags:
+      - sntest
+      - vm
+
+  - name: Create a POWER Virtual Server Instance
+    ibm_pi_instance:
+      state: available
+      pi_placement_group_id : "{{ pi_placement_group_id }}"
+      pi_memory: "{{ memory }}"
+      pi_processors: "{{ processors }}"
+      pi_instance_name: "{{ item.name }}"
+      pi_proc_type: "{{ proc_type }}"
+      pi_image_id: "{{ image_dict[pi_image] }}"
+      pi_volume_ids:  "{{diskid_list}}" 
+      pi_network: "{{lpar_network_list}}"
+      pi_key_pair_name: "{{ ssh_public_key }}"
+      pi_sys_type: "{{ sys_type }}"
+      pi_replication_policy: none
+      pi_replication_scheme: suffix
+      pi_replicants: "1"
+      pi_cloud_instance_id: "{{ pi_cloud_instance_id }}"
+      id: "{{ pi_instance.resource.id | default(omit) }}"
+      pi_health_status: WARNING
+    register: pi_instance_create_output
+    with_items: "{{tobecreated_lpars}}" 
+    #when: pi_instance_existing_output.rc != 0
+    tags:
+      - sntest
+      - vm
+   
+  - meta: end_play
+
+  - name: Check for existing Virtual Server Instance
+    ibm_pi_instance_info:
+      pi_instance_name: "{{ item }}"
       pi_cloud_instance_id: "{{ pi_cloud_instance_id }}"
     failed_when:
       - pi_instance_existing_output.rc != 0
@@ -235,16 +298,8 @@
       pi_proc_type: "{{ proc_type }}"
       pi_image_id: "{{ image_dict[pi_image] }}"
       pi_volume_ids:  "{{diskid_list}}" 
-      #pi_volume_ids:  "{{pi_volume_existing_output | json_query('results[*].resource.id') }}"
-      pi_network: "{{lpar_networks}}"
-        #- network_id: "PVSDALLAS12_101_SN"
-        #- network_id: "RACA"
-        #- network_id: "RACB"
-        #- network_id: "RACC"
-        #- network_id: "23576aae-b584-4f0e-8ceb-974ee4352420"
-        #- network_id: "844fb31e-289d-4a86-84fd-2dae1723492e"
+      pi_network: "{{lpar_network_list}}"
       pi_key_pair_name: "{{ ssh_public_key }}"
-      #pi_key_pair_name: "{{ pi_ssh_key.pi_key_name }}"
       pi_sys_type: "{{ sys_type }}"
       pi_replication_policy: none
       pi_replication_scheme: suffix
@@ -257,17 +312,15 @@
     #when: pi_instance_existing_output.rc != 0
     tags: vm
    
-  - meta: end_play 
+  - name: getting ip addresses
+    debug: 
+      msg: "{{pi_instance_existing_output}}"
+    tags: vm
 
-  #- name: setting disks var with ids
-    #setfact:
-      #diskid_list: 
-    #with_items: 
-      #- "{{ pi_vols.results | json_query(query) }}"
-    #vars: 
-      #query: "item[? skipped != true ]. "
-    #tags: disks
+  - name: getting ip addresses
+    debug: 
+      msg: "{{pi_instance_create_output}}"
+    tags: vm
 
 
-      
 
