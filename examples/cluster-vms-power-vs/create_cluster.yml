@@ -236,14 +236,13 @@
       - sntest
       - vm
 
-  - name: setting existing/non existing disk already existing networks
+  - name: setting existing/non existing Virtual Server Instances
     set_fact:
       existing_lpars: "{{ pi_instance_existing_output.results | json_query(query)  }}"
       tobecreated_lpars: "{{ pi_instance_existing_output.results | json_query(query1)  }}"
     vars:
       query: "[? rc ==`0`].{id: resource.id, name: resource.pi_instance_name}"
       query1: "[? rc !=`0`].{name: item}"
-      #query1: "[? rc !=`0`].{name: item} "
     tags:
       - sntest
       - vm
@@ -269,58 +268,72 @@
       pi_health_status: WARNING
     register: pi_instance_create_output
     with_items: "{{tobecreated_lpars}}" 
-    #when: pi_instance_existing_output.rc != 0
     tags:
       - sntest
       - vm
-   
-  - meta: end_play
-
-  - name: Check for existing Virtual Server Instance
-    ibm_pi_instance_info:
-      pi_instance_name: "{{ item }}"
-      pi_cloud_instance_id: "{{ pi_cloud_instance_id }}"
-    failed_when:
-      - pi_instance_existing_output.rc != 0
-      - '"does not exist" not in pi_instance_existing_output.stderr'
-    with_sequence: start=1 end={{cluster_vm_name_number}} format={{cluster_vm_name_prefix}}%04x
-    register: pi_instance_existing_output
-    tags: vm
 
 
-  - name: Create a POWER Virtual Server Instance
-    ibm_pi_instance:
-      state: available
-      pi_placement_group_id : "{{ pi_placement_group_id }}"
-      pi_memory: "{{ memory }}"
-      pi_processors: "{{ processors }}"
-      pi_instance_name: "{{ item }}"
-      pi_proc_type: "{{ proc_type }}"
-      pi_image_id: "{{ image_dict[pi_image] }}"
-      pi_volume_ids:  "{{diskid_list}}" 
-      pi_network: "{{lpar_network_list}}"
-      pi_key_pair_name: "{{ ssh_public_key }}"
-      pi_sys_type: "{{ sys_type }}"
-      pi_replication_policy: none
-      pi_replication_scheme: suffix
-      pi_replicants: "1"
-      pi_cloud_instance_id: "{{ pi_cloud_instance_id }}"
-      id: "{{ pi_instance.resource.id | default(omit) }}"
-      pi_health_status: WARNING
-    register: pi_instance_create_output
-    with_sequence: start=1 end={{cluster_vm_name_number}} format={{cluster_vm_name_prefix}}%04x
-    #when: pi_instance_existing_output.rc != 0
-    tags: vm
-   
-  - name: getting ip addresses
-    debug: 
-      msg: "{{pi_instance_existing_output}}"
-    tags: vm
-
-  - name: getting ip addresses
-    debug: 
-      msg: "{{pi_instance_create_output}}"
-    tags: vm
+  - name: showing info from pi_instance_existing_output
+    set_fact: 
+      existing_ips: "{{ existing_ips  | default([]) + [item.ip]}}"
+    with_items: "{{pi_instance_existing_output | json_query(query) }}"
+    vars:
+      query: "results[*].resource.addresses[*].{ip: ip, name: network_name}"
+    when: item.name == private_rac_networks[0].pi_network_name 
+    tags:
+      - sntest
+      - vm
 
 
+  - name: setting new_ips info from pi_instance_create_output
+    set_fact: 
+      new_ips: "{{new_ips  | default([]) + [item.ip]}}" 
+    with_items:  "{{pi_instance_create_output  | json_query(query) }}"
+    vars:
+      query: "results[*].resource.pi_network[*].{ip: ip_address, name: network_name}"
+    when: item.name == private_rac_networks[0].pi_network_name 
+    tags:
+      - sntest
+      - vm
+
+  - name: Add VSI to Ansible inventory
+    add_host:
+      name: "{{ item }}"
+      ansible_user: root
+      groups: new_vsi
+      ansible_ssh_extra_args: -o StrictHostKeyChecking=no
+    with_items: 
+      - "{{existing_ips }}"
+    tags:
+      - sntest
+      - vm
+    when: existing_ips is defined 
+
+  - name: Add VSI to Ansible inventory
+    add_host:
+      name: "{{ item }}"
+      ansible_user: root
+      groups: new_vsi
+      ansible_ssh_extra_args: -o StrictHostKeyChecking=no
+    with_items: 
+      - "{{new_ips}}"
+    tags:
+      - sntest
+      - vm
+    when: new_ips is defined 
+
+- name: Connect to VSI
+  hosts: new_vsi
+  gather_facts: False
+  tasks:
+    - name: Wait for VSI to become reachable over SSH
+      wait_for_connection:
+
+    - name: Collect OS login message
+      command: cat /etc/motd
+      register: os_motd
+
+    - name: Print MOTD
+      debug:
+        var: os_motd.stdout_lines
 
